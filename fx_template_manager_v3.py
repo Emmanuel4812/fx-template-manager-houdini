@@ -65,34 +65,40 @@ class Template:
     def __init__(self, folder: Path):
         self.path = folder
         self.name = folder.name
-        self.hip_file = self._find_hip()
-        self.preview_file = self._find_preview()
+        self.hip_file      = self._find_hip()
+        self.thumbnail_file = self._find_thumbnail()   # imagen de thumbnail/
+        self.video_file    = self._find_video()        # video de video/
 
     def _find_hip(self) -> Optional[Path]:
         for f in sorted(self.path.glob("*.hip")):
             return f
         return None
 
-    def _find_preview(self) -> Optional[Path]:
-        for d in ["video", "videos", "preview", "previews"]:
+    def _find_thumbnail(self) -> Optional[Path]:
+        """Busca imagen en carpeta thumbnail/ o thumbnails/"""
+        for d in ["thumbnail", "thumbnails"]:
             sub = self.path / d
             if sub.exists():
-                for ext in ["*.mp4", "*.mov", "*.avi", "*.webm",
-                            "*.png", "*.jpg", "*.jpeg", "*.exr"]:
+                for ext in ["*.png", "*.jpg", "*.jpeg", "*.exr"]:
                     for f in sub.glob(ext):
                         return f
-        for ext in ["*.mp4", "*.mov", "*.avi", "*.png", "*.jpg", "*.jpeg"]:
-            for f in self.path.glob(ext):
-                return f
         return None
 
-    def is_video(self) -> bool:
-        return bool(self.preview_file and
-                    self.preview_file.suffix.lower() in [".mp4", ".mov", ".avi", ".webm"])
+    def _find_video(self) -> Optional[Path]:
+        """Busca video en carpeta video/ o videos/"""
+        for d in ["video", "videos"]:
+            sub = self.path / d
+            if sub.exists():
+                for ext in ["*.mp4", "*.mov", "*.avi", "*.webm"]:
+                    for f in sub.glob(ext):
+                        return f
+        return None
 
-    def is_image(self) -> bool:
-        return bool(self.preview_file and
-                    self.preview_file.suffix.lower() in [".png", ".jpg", ".jpeg", ".exr"])
+    def has_thumbnail(self) -> bool:
+        return self.thumbnail_file is not None
+
+    def has_video(self) -> bool:
+        return self.video_file is not None
 
 
 # ── Thread de carga ───────────────────────────────────────────────────────────
@@ -215,8 +221,12 @@ class ThumbnailCard(QtWidgets.QFrame):
         name_label.setStyleSheet("color:#ddd; font-size:11px; font-weight:500;")
         layout.addWidget(name_label)
 
-        badge_text = "Video" if self.template.is_video() else \
-                     "Imagen" if self.template.is_image() else "Sin preview"
+        parts = []
+        if self.template.has_video():
+            parts.append("Video")
+        if self.template.has_thumbnail():
+            parts.append("Thumb")
+        badge_text = "  ·  ".join(parts) if parts else "Sin preview"
         badge = QtWidgets.QLabel(badge_text)
         badge.setAlignment(Qt.AlignCenter)
         badge.setStyleSheet("color:#6b7280; font-size:10px;")
@@ -227,8 +237,9 @@ class ThumbnailCard(QtWidgets.QFrame):
     def _set_thumbnail(self):
         w, h = CARD_W - 12, THUMB_H
 
-        if self.template.is_image():
-            pix = QtGui.QPixmap(str(self.template.preview_file))
+        # Prioridad 1: imagen de carpeta thumbnail/
+        if self.template.has_thumbnail():
+            pix = QtGui.QPixmap(str(self.template.thumbnail_file))
             if not pix.isNull():
                 scaled = pix.scaled(w, h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
                 x = (scaled.width()  - w) // 2
@@ -237,7 +248,7 @@ class ThumbnailCard(QtWidgets.QFrame):
                 self.thumb.setPixmap(self._round_pixmap(cropped))
                 return
 
-        # Placeholder con color e iniciales
+        # Prioridad 2: placeholder con color e iniciales
         color    = _placeholder_color(self.template.name)
         initials = _initials(self.template.name)
 
@@ -247,7 +258,8 @@ class ThumbnailCard(QtWidgets.QFrame):
         painter = QtGui.QPainter(pix)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
 
-        if self.template.is_video():
+        # Icono de video si tiene video
+        if self.template.has_video():
             f = QtGui.QFont("Arial", 30)
             painter.setFont(f)
             painter.setPen(QtGui.QColor(255, 255, 255, 100))
@@ -302,7 +314,7 @@ class ThumbnailCard(QtWidgets.QFrame):
         """)
         act_merge  = menu.addAction("Merge con escena abierta")
         act_folder = menu.addAction("Abrir carpeta")
-        act_video  = menu.addAction("Reproducir video") if self.template.is_video() else None
+        act_video  = menu.addAction("Reproducir video") if self.template.has_video() else None
 
         action = menu.exec_(self.mapToGlobal(pos))
         if action == act_merge:
@@ -310,7 +322,7 @@ class ThumbnailCard(QtWidgets.QFrame):
         elif action == act_folder:
             self.explore.emit(self.template)
         elif act_video and action == act_video:
-            os.startfile(str(self.template.preview_file))
+            os.startfile(str(self.template.video_file))
 
 
 # ── Grid scrolleable ──────────────────────────────────────────────────────────
@@ -475,34 +487,38 @@ class DetailPanel(QtWidgets.QWidget):
 
         self.lbl_name.setText(template.name)
         self.lbl_file.setText(template.hip_file.name if template.hip_file else "-")
-        self.lbl_preview.setText(template.preview_file.name if template.preview_file else "Sin preview")
+
+        # Info de preview en el panel de info
+        preview_parts = []
+        if template.has_thumbnail():
+            preview_parts.append(f"Thumb: {template.thumbnail_file.name}")
+        if template.has_video():
+            preview_parts.append(f"Video: {template.video_file.name}")
+        self.lbl_preview.setText("\n".join(preview_parts) if preview_parts else "Sin preview")
+
         self.btn_merge.setEnabled(True)
 
-        if template.is_image():
-            pix = QtGui.QPixmap(str(template.preview_file))
+        # ── Thumbnail en el panel ──────────────────────────────────────────────
+        if template.has_thumbnail():
+            pix = QtGui.QPixmap(str(template.thumbnail_file))
             if not pix.isNull():
                 scaled = pix.scaled(pw, ph, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.preview_label.setPixmap(scaled)
                 self.preview_label.setStyleSheet("background:#1a1a1a; border-radius:8px;")
-            self.btn_video.setVisible(False)
-
-        elif template.is_video():
-            # Placeholder con color + iniciales + icono play
+            else:
+                self.preview_label.setPixmap(self._make_placeholder(template, pw, ph))
+                self.preview_label.setStyleSheet("border-radius:8px;")
+        else:
+            # Sin thumbnail: placeholder con iniciales (+ icono ▶ si tiene video)
             self.preview_label.setPixmap(self._make_placeholder(template, pw, ph))
             self.preview_label.setStyleSheet("border-radius:8px;")
-            self.btn_video.setVisible(True)
 
-        else:
-            self.preview_label.clear()
-            self.preview_label.setText("Sin preview disponible")
-            self.preview_label.setStyleSheet(
-                "background:#1a1a1a; color:#555; border-radius:8px; font-size:13px;"
-            )
-            self.btn_video.setVisible(False)
+        # ── Botón de video (independiente del thumbnail) ───────────────────────
+        self.btn_video.setVisible(template.has_video())
 
     def _open_video(self):
-        if self.template and self.template.preview_file:
-            os.startfile(str(self.template.preview_file))
+        if self.template and self.template.video_file:
+            os.startfile(str(self.template.video_file))
 
     def clear(self):
         self.template = None
