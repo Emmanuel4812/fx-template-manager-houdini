@@ -75,8 +75,8 @@ class Template:
         return None
 
     def _find_thumbnail(self) -> Optional[Path]:
-        """Busca imagen en carpeta thumbnail/ o thumbnails/"""
-        for d in ["thumbnail", "thumbnails"]:
+        """Busca imagen en carpeta thumb/, thumbnail/ o thumbnails/"""
+        for d in ["thumb", "thumbnail", "thumbnails"]:
             sub = self.path / d
             if sub.exists():
                 for ext in ["*.png", "*.jpg", "*.jpeg", "*.exr"]:
