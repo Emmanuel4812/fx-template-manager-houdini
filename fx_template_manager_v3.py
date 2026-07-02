@@ -377,27 +377,36 @@ class DetailPanel(QtWidgets.QWidget):
         self.template: Optional[Template] = None
         self._build()
 
+    # Dimensiones fijas del panel de preview
+    PW = 336
+    PH = 220
+
     def _build(self):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
-        # Preview: imagen o placeholder con boton de video
+        # Preview: imagen fija, nunca depende del tamaño real del widget
         self.preview_label = QtWidgets.QLabel("Selecciona un template")
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setFixedHeight(260)
+        self.preview_label.setFixedSize(self.PW, self.PH)
         self.preview_label.setStyleSheet(
             "background:#1a1a1a; color:#555; border-radius:8px; font-size:13px;"
         )
-        layout.addWidget(self.preview_label)
+        layout.addWidget(self.preview_label, 0, Qt.AlignHCenter)
 
-        # Boton para abrir video externo (visible solo cuando hay video)
-        self.btn_video = QtWidgets.QPushButton("▶   Reproducir video")
-        self.btn_video.setFixedHeight(34)
+        # Botón para abrir video externo
+        self.btn_video = QtWidgets.QPushButton("  ▶   Abrir video preview")
+        self.btn_video.setFixedHeight(36)
         self.btn_video.setVisible(False)
         self.btn_video.setStyleSheet("""
-            QPushButton { background:#374151; color:#ddd; border-radius:6px; font-size:12px; }
-            QPushButton:hover { background:#4b5563; }
+            QPushButton {
+                background:#1f2937; color:#e5e7eb;
+                border: 1px solid #374151;
+                border-radius:6px; font-size:12px; font-weight:500;
+            }
+            QPushButton:hover   { background:#374151; color:white; border-color:#4b5563; }
+            QPushButton:pressed { background:#111827; }
         """)
         self.btn_video.clicked.connect(self._open_video)
         layout.addWidget(self.btn_video)
@@ -445,8 +454,9 @@ class DetailPanel(QtWidgets.QWidget):
         self.btn_merge.clicked.connect(lambda: self.merge_requested.emit(self.template))
         layout.addWidget(self.btn_merge)
 
-    def _make_placeholder(self, template: Template, w: int, h: int) -> QtGui.QPixmap:
-        """Genera pixmap de color con iniciales, igual que la tarjeta"""
+    def _make_placeholder(self, template: Template) -> QtGui.QPixmap:
+        """Genera pixmap de color con iniciales usando dimensiones fijas del panel"""
+        w, h  = self.PW, self.PH
         color    = _placeholder_color(template.name)
         initials = _initials(template.name)
 
@@ -456,13 +466,7 @@ class DetailPanel(QtWidgets.QWidget):
         painter = QtGui.QPainter(pix)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
 
-        if template.is_video():
-            f = QtGui.QFont("Arial", 52)
-            painter.setFont(f)
-            painter.setPen(QtGui.QColor(255, 255, 255, 80))
-            painter.drawText(pix.rect(), Qt.AlignCenter, "▶")
-
-        f2 = QtGui.QFont("Arial", 40, QtGui.QFont.Bold)
+        f2 = QtGui.QFont("Arial", 48, QtGui.QFont.Bold)
         painter.setFont(f2)
         painter.setPen(QtGui.QColor(255, 255, 255, 200))
         painter.drawText(pix.rect(), Qt.AlignCenter, initials)
@@ -482,13 +486,10 @@ class DetailPanel(QtWidgets.QWidget):
 
     def load(self, template: Template):
         self.template = template
-        pw = self.preview_label.width() or 340
-        ph = self.preview_label.height() or 260
 
         self.lbl_name.setText(template.name)
         self.lbl_file.setText(template.hip_file.name if template.hip_file else "-")
 
-        # Info de preview en el panel de info
         preview_parts = []
         if template.has_thumbnail():
             preview_parts.append(f"Thumb: {template.thumbnail_file.name}")
@@ -498,22 +499,29 @@ class DetailPanel(QtWidgets.QWidget):
 
         self.btn_merge.setEnabled(True)
 
-        # ── Thumbnail en el panel ──────────────────────────────────────────────
+        # ── Thumbnail ──────────────────────────────────────────────────────────
         if template.has_thumbnail():
             pix = QtGui.QPixmap(str(template.thumbnail_file))
             if not pix.isNull():
-                scaled = pix.scaled(pw, ph, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.preview_label.setPixmap(scaled)
-                self.preview_label.setStyleSheet("background:#1a1a1a; border-radius:8px;")
+                scaled = pix.scaled(self.PW, self.PH, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                # Centrar sobre fondo negro
+                canvas = QtGui.QPixmap(self.PW, self.PH)
+                canvas.fill(QtGui.QColor("#1a1a1a"))
+                p = QtGui.QPainter(canvas)
+                x = (self.PW - scaled.width())  // 2
+                y = (self.PH - scaled.height()) // 2
+                p.drawPixmap(x, y, scaled)
+                p.end()
+                self.preview_label.setPixmap(canvas)
+                self.preview_label.setStyleSheet("border-radius:8px;")
             else:
-                self.preview_label.setPixmap(self._make_placeholder(template, pw, ph))
+                self.preview_label.setPixmap(self._make_placeholder(template))
                 self.preview_label.setStyleSheet("border-radius:8px;")
         else:
-            # Sin thumbnail: placeholder con iniciales (+ icono ▶ si tiene video)
-            self.preview_label.setPixmap(self._make_placeholder(template, pw, ph))
+            self.preview_label.setPixmap(self._make_placeholder(template))
             self.preview_label.setStyleSheet("border-radius:8px;")
 
-        # ── Botón de video (independiente del thumbnail) ───────────────────────
+        # ── Botón de video ─────────────────────────────────────────────────────
         self.btn_video.setVisible(template.has_video())
 
     def _open_video(self):
