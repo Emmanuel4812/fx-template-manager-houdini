@@ -11,10 +11,8 @@ from typing import Optional, List
 
 import hou
 
-from PySide2 import QtWidgets, QtCore, QtGui, QtMultimedia, QtMultimediaWidgets
-from PySide2.QtCore import Qt, QThread, Signal, QUrl, QSize
-from PySide2.QtMultimedia import QMediaPlayer, QMediaContent
-from PySide2.QtMultimediaWidgets import QVideoWidget
+from PySide2 import QtWidgets, QtCore, QtGui
+from PySide2.QtCore import Qt, QThread, Signal
 
 
 CONFIG_FILE = os.path.expanduser("~/.houdini/fx_template_manager_config.json")
@@ -365,7 +363,6 @@ class DetailPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.template: Optional[Template] = None
-        self._player: Optional[QMediaPlayer] = None
         self._build()
 
     def _build(self):
@@ -373,20 +370,25 @@ class DetailPanel(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # Stack preview
-        self.stack = QtWidgets.QStackedWidget()
-        self.stack.setMinimumHeight(260)
+        # Preview: imagen o placeholder con boton de video
+        self.preview_label = QtWidgets.QLabel("Selecciona un template")
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setFixedHeight(260)
+        self.preview_label.setStyleSheet(
+            "background:#1a1a1a; color:#555; border-radius:8px; font-size:13px;"
+        )
+        layout.addWidget(self.preview_label)
 
-        self.img_label = QtWidgets.QLabel("Selecciona un template")
-        self.img_label.setAlignment(Qt.AlignCenter)
-        self.img_label.setStyleSheet("background:#1a1a1a; color:#555; border-radius:8px; font-size:13px;")
-        self.stack.addWidget(self.img_label)   # 0
-
-        self.video_widget = QVideoWidget()
-        self.video_widget.setStyleSheet("background:#000; border-radius:8px;")
-        self.stack.addWidget(self.video_widget)  # 1
-
-        layout.addWidget(self.stack)
+        # Boton para abrir video externo (visible solo cuando hay video)
+        self.btn_video = QtWidgets.QPushButton("▶   Reproducir video")
+        self.btn_video.setFixedHeight(34)
+        self.btn_video.setVisible(False)
+        self.btn_video.setStyleSheet("""
+            QPushButton { background:#374151; color:#ddd; border-radius:6px; font-size:12px; }
+            QPushButton:hover { background:#4b5563; }
+        """)
+        self.btn_video.clicked.connect(self._open_video)
+        layout.addWidget(self.btn_video)
 
         # Info
         info = QtWidgets.QGroupBox("Información")
@@ -401,9 +403,9 @@ class DetailPanel(QtWidgets.QWidget):
         self.lbl_name    = QtWidgets.QLabel("-")
         self.lbl_file    = QtWidgets.QLabel("-")
         self.lbl_preview = QtWidgets.QLabel("-")
-        for l in (self.lbl_name, self.lbl_file, self.lbl_preview):
-            l.setStyleSheet("color:#ccc;")
-            l.setWordWrap(True)
+        for lb in (self.lbl_name, self.lbl_file, self.lbl_preview):
+            lb.setStyleSheet("color:#ccc;")
+            lb.setWordWrap(True)
 
         def key(t):
             lb = QtWidgets.QLabel(t)
@@ -431,59 +433,87 @@ class DetailPanel(QtWidgets.QWidget):
         self.btn_merge.clicked.connect(lambda: self.merge_requested.emit(self.template))
         layout.addWidget(self.btn_merge)
 
+    def _make_placeholder(self, template: Template, w: int, h: int) -> QtGui.QPixmap:
+        """Genera pixmap de color con iniciales, igual que la tarjeta"""
+        color    = _placeholder_color(template.name)
+        initials = _initials(template.name)
+
+        pix = QtGui.QPixmap(w, h)
+        pix.fill(QtGui.QColor(color))
+
+        painter = QtGui.QPainter(pix)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        if template.is_video():
+            f = QtGui.QFont("Arial", 52)
+            painter.setFont(f)
+            painter.setPen(QtGui.QColor(255, 255, 255, 80))
+            painter.drawText(pix.rect(), Qt.AlignCenter, "▶")
+
+        f2 = QtGui.QFont("Arial", 40, QtGui.QFont.Bold)
+        painter.setFont(f2)
+        painter.setPen(QtGui.QColor(255, 255, 255, 200))
+        painter.drawText(pix.rect(), Qt.AlignCenter, initials)
+        painter.end()
+
+        # Bordes redondeados
+        rounded = QtGui.QPixmap(pix.size())
+        rounded.fill(Qt.transparent)
+        p2 = QtGui.QPainter(rounded)
+        p2.setRenderHint(QtGui.QPainter.Antialiasing)
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(0, 0, w, h, 8, 8)
+        p2.setClipPath(path)
+        p2.drawPixmap(0, 0, pix)
+        p2.end()
+        return rounded
+
     def load(self, template: Template):
         self.template = template
+        pw = self.preview_label.width() or 340
+        ph = self.preview_label.height() or 260
+
         self.lbl_name.setText(template.name)
         self.lbl_file.setText(template.hip_file.name if template.hip_file else "-")
         self.lbl_preview.setText(template.preview_file.name if template.preview_file else "Sin preview")
         self.btn_merge.setEnabled(True)
-        self._stop_video()
 
         if template.is_image():
             pix = QtGui.QPixmap(str(template.preview_file))
             if not pix.isNull():
-                scaled = pix.scaled(340, 260, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.img_label.setPixmap(scaled)
-                self.img_label.setStyleSheet("background:#1a1a1a; border-radius:8px;")
-            self.stack.setCurrentIndex(0)
+                scaled = pix.scaled(pw, ph, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.preview_label.setPixmap(scaled)
+                self.preview_label.setStyleSheet("background:#1a1a1a; border-radius:8px;")
+            self.btn_video.setVisible(False)
 
         elif template.is_video():
-            self._play_video(str(template.preview_file))
+            # Placeholder con color + iniciales + icono play
+            self.preview_label.setPixmap(self._make_placeholder(template, pw, ph))
+            self.preview_label.setStyleSheet("border-radius:8px;")
+            self.btn_video.setVisible(True)
 
         else:
-            self.img_label.clear()
-            self.img_label.setText("Sin preview disponible")
-            self.img_label.setStyleSheet("background:#1a1a1a; color:#555; border-radius:8px; font-size:13px;")
-            self.stack.setCurrentIndex(0)
+            self.preview_label.clear()
+            self.preview_label.setText("Sin preview disponible")
+            self.preview_label.setStyleSheet(
+                "background:#1a1a1a; color:#555; border-radius:8px; font-size:13px;"
+            )
+            self.btn_video.setVisible(False)
 
-    def _play_video(self, path: str):
-        self._player = QMediaPlayer(self, QMediaPlayer.VideoSurface)
-        self._player.setVideoOutput(self.video_widget)
-        self._player.setMedia(QMediaContent(QUrl.fromLocalFile(path)))
-        self._player.mediaStatusChanged.connect(self._loop)
-        self._player.play()
-        self.stack.setCurrentIndex(1)
-
-    def _loop(self, status):
-        if status == QMediaPlayer.EndOfMedia and self._player:
-            self._player.setPosition(0)
-            self._player.play()
-
-    def _stop_video(self):
-        if self._player:
-            self._player.stop()
-            self._player.setMedia(QMediaContent())
-            self._player = None
+    def _open_video(self):
+        if self.template and self.template.preview_file:
+            os.startfile(str(self.template.preview_file))
 
     def clear(self):
-        self._stop_video()
         self.template = None
-        self.img_label.clear()
-        self.img_label.setText("Selecciona un template")
-        self.img_label.setStyleSheet("background:#1a1a1a; color:#555; border-radius:8px; font-size:13px;")
-        self.stack.setCurrentIndex(0)
-        for l in (self.lbl_name, self.lbl_file, self.lbl_preview):
-            l.setText("-")
+        self.preview_label.clear()
+        self.preview_label.setText("Selecciona un template")
+        self.preview_label.setStyleSheet(
+            "background:#1a1a1a; color:#555; border-radius:8px; font-size:13px;"
+        )
+        self.btn_video.setVisible(False)
+        for lb in (self.lbl_name, self.lbl_file, self.lbl_preview):
+            lb.setText("-")
         self.btn_merge.setEnabled(False)
 
 
@@ -616,7 +646,6 @@ class FXTemplateManager(QtWidgets.QDialog):
 
     def closeEvent(self, event):
         global _window_instance
-        self.detail_panel._stop_video()
         _window_instance = None
         super().closeEvent(event)
 
