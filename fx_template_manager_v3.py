@@ -85,13 +85,15 @@ class Template:
         return None
 
     def _find_video(self) -> Optional[Path]:
-        """Busca video en carpeta video/ o videos/"""
+        """Busca el video mas reciente en carpeta video/ o videos/"""
         for d in ["video", "videos"]:
             sub = self.path / d
             if sub.exists():
+                videos = []
                 for ext in ["*.mp4", "*.mov", "*.avi", "*.webm"]:
-                    for f in sub.glob(ext):
-                        return f
+                    videos.extend(sub.glob(ext))
+                if videos:
+                    return max(videos, key=lambda f: f.stat().st_mtime)
         return None
 
     def has_thumbnail(self) -> bool:
